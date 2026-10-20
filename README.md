@@ -28,6 +28,9 @@ If PowerShell blocks activation, run `Set-ExecutionPolicy -Scope Process -Execut
 
 Open http://127.0.0.1:8000. API documentation is at http://127.0.0.1:8000/docs.
 
+## GitHub Pages
+GitHub Pages publishes the static dashboard from `static/` at the repository site root. Pages cannot run the FastAPI backend, so live scans and SQLite history are unavailable on the Pages-hosted copy; use the local setup above for the complete app.
+
 ## Email breach lookup
 Email scans send the address to XposedOrNot's public endpoint (`/v1/check-email/`) for lookup. Its free API has per-IP rate limits; a `429` response is shown as rate-limited rather than as a finding. Non-200 responses are shown as lookup errors. A successful empty response means no matching records were returned; it does not prove the address was never exposed.
 
