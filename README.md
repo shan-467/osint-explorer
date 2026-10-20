@@ -3,7 +3,8 @@
 A local-first educational OSINT dashboard inspired by public-data search tools. It runs real checks and does not generate mock findings.
 
 ## Features
-- Username checks against a small, explicit list of public profile URL templates.
+- Username checks against GitHub and GitLab official public APIs, plus evidence-limited public profile checks for Instagram, Reddit, LinkedIn, TikTok, and Keybase.
+- Optional YouTube channel search using the official YouTube Data API; results are candidate channels, not exact username matches.
 - Email syntax validation and XposedOrNot breach lookup.
 - Domain DNS (A, AAAA, MX, NS, TXT), HTTPS response and TLS certificate checks.
 - SQLite scan history, JSON report view, CSV export.
@@ -34,6 +35,12 @@ GitHub Pages publishes the static dashboard from `static/` at the repository sit
 ## Email breach lookup
 Email scans send the address to XposedOrNot's public endpoint (`/v1/check-email/`) for lookup. Its free API has per-IP rate limits; a `429` response is shown as rate-limited rather than as a finding. Non-200 responses are shown as lookup errors. A successful empty response means no matching records were returned; it does not prove the address was never exposed.
 
+## Optional username API configuration
+- `GITHUB_TOKEN` is optional and only sent to GitHub's public Users API to increase its authenticated rate limit. Keep it in `.env`, never in frontend code or Git.
+- `YOUTUBE_API_KEY` is optional. Enable YouTube Data API v3 in Google Cloud and set the key in `.env`. A username scan makes one channel-search API request when configured; check Google's current quota and restrict the key in Google Cloud Console.
+- Instagram, LinkedIn, TikTok, Reddit, and Keybase checks use fixed public profile URLs. These pages may be generic, gated, or challenge pages; HTTP 200 is treated as inconclusive. A returned username match is not proof of identity.
+- For a Render deployment, configure optional API keys in the Render service's environment settings; do not put them in the Pages frontend.
+
 ## Test
 In a second terminal with the virtual environment active:
 ```powershell
@@ -43,8 +50,8 @@ The tests exercise input validation and report helpers without making external n
 
 ## Safe use and limits
 - Use only on accounts you own or have permission to assess, and respect each platform's terms and rate limits.
-- Username checks only request profile pages from the hard-coded allowlist in `main.py`. A `403`, `429`, challenge page, or timeout is `inconclusive`, not a match.
-- Username availability is not identity proof. `found` means the URL returned a normal successful response, not that an account belongs to a particular person.
+- Username checks only contact fixed, documented API hosts and profile URL templates in `main.py`. A `403`, `429`, challenge page, generic page, or timeout is `inconclusive`, not a match.
+- Username availability is not identity proof. `found` is reserved for exact public API username objects; YouTube search results and profile-page responses are not treated as identity matches.
 - Domain checks are for domains you own or are authorized to assess. The backend rejects localhost, private, loopback, link-local, reserved, and non-public IP resolutions to reduce SSRF risk. Redirects are not followed.
 - This is a local educational prototype, not a production multi-user service. Do not expose it publicly without authentication, rate limiting, security review, and stronger isolation.
 - Scan history stores targets and findings in `osint_history.db`. Delete that file to erase local history.

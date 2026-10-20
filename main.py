@@ -28,6 +28,8 @@ from pydantic import BaseModel, Field
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 DB_PATH = Path(os.getenv("DATABASE_PATH") or BASE_DIR / "osint_history.db")
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "").strip()
 CORS_ORIGINS = [
     origin.strip()
     for origin in os.getenv("CORS_ORIGINS", "").split(",")
@@ -47,12 +49,13 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 
 # Deliberately small, explicit allowlist. No arbitrary URL fetching.
 PROFILE_SITES = {
-    "GitHub": "https://github.com/{username}",
-    "GitLab": "https://gitlab.com/{username}",
+    "Instagram": "https://www.instagram.com/{username}/",
     "Reddit": "https://www.reddit.com/user/{username}/",
+    "LinkedIn": "https://www.linkedin.com/in/{username}/",
+    "TikTok": "https://www.tiktok.com/@{username}",
     "Keybase": "https://keybase.io/{username}",
 }
-USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,39}$")
+USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,50}$")
 DOMAIN_RE = re.compile(r"^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)(?:\.(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?))+$")
 
 class ScanRequest(BaseModel):
@@ -185,39 +188,251 @@ def scan_domain(raw: str) -> dict[str, Any]:
         "note": "A valid TLS certificate is one signal, not a full security audit.",
     }
 
+def check_github(username: str) -> dict[str, Any]:
+    profile_url = f"https://github.com/{quote(username, safe='')}"
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "OSINT-Explorer-Educational/1.0",
+    }
+    if GITHUB_TOKEN:
+        headers["Authorization"] = f"Bearer {GITHUB_TOKEN}"
+    try:
+        response = requests.get(
+            f"https://api.github.com/users/{quote(username, safe='')}",
+            headers=headers,
+            timeout=8,
+        )
+        if response.status_code == 200:
+            user = response.json()
+            if (
+                isinstance(user, dict)
+                and isinstance(user.get("login"), str)
+                and user["login"].casefold() == username.casefold()
+            ):
+                return {
+                    "source": "GitHub",
+                    "url": profile_url,
+                    "status": "found",
+                    "http_status": response.status_code,
+                    "method": "official_api",
+                    "evidence": "GitHub public Users API returned an exact username match.",
+                    "profile": {
+                        "login": user.get("login"),
+                        "name": user.get("name"),
+                        "bio": user.get("bio"),
+                        "public_repos": user.get("public_repos"),
+                        "followers": user.get("followers"),
+                        "created_at": user.get("created_at"),
+                    },
+                }
+            return {
+                "source": "GitHub",
+                "url": profile_url,
+                "status": "inconclusive",
+                "http_status": response.status_code,
+                "method": "official_api",
+                "evidence": "GitHub API returned an unexpected or non-matching user object.",
+            }
+        if response.status_code == 404:
+            status = "not_found"
+            evidence = "GitHub API returned HTTP 404 for this username."
+        else:
+            status = "inconclusive"
+            evidence = f"GitHub API returned HTTP {response.status_code}; access restrictions or rate limits may prevent a conclusion."
+        return {
+            "source": "GitHub",
+            "url": profile_url,
+            "status": status,
+            "http_status": response.status_code,
+            "method": "official_api",
+            "evidence": evidence,
+        }
+    except (requests.RequestException, ValueError) as exc:
+        return {
+            "source": "GitHub",
+            "url": profile_url,
+            "status": "inconclusive",
+            "method": "official_api",
+            "evidence": str(exc),
+        }
+
+def check_gitlab(username: str) -> dict[str, Any]:
+    profile_url = f"https://gitlab.com/{quote(username, safe='')}"
+    try:
+        response = requests.get(
+            "https://gitlab.com/api/v4/users",
+            params={"username": username},
+            headers={"User-Agent": "OSINT-Explorer-Educational/1.0"},
+            timeout=8,
+        )
+        if response.status_code == 200:
+            users = response.json()
+            if not isinstance(users, list):
+                raise ValueError("GitLab returned an unexpected response.")
+            match = next(
+                (
+                    user
+                    for user in users
+                    if isinstance(user, dict)
+                    and isinstance(user.get("username"), str)
+                    and user["username"].casefold() == username.casefold()
+                ),
+                None,
+            )
+            if match:
+                return {
+                    "source": "GitLab",
+                    "url": profile_url,
+                    "status": "found",
+                    "http_status": response.status_code,
+                    "method": "official_api",
+                    "evidence": "GitLab public Users API returned an exact username match.",
+                    "profile": {
+                        "username": match.get("username"),
+                        "name": match.get("name"),
+                        "state": match.get("state"),
+                        "avatar_url": match.get("avatar_url"),
+                    },
+                }
+            return {
+                "source": "GitLab",
+                "url": profile_url,
+                "status": "not_found",
+                "http_status": response.status_code,
+                "method": "official_api",
+                "evidence": "GitLab API returned no exact username match.",
+            }
+        return {
+            "source": "GitLab",
+            "url": profile_url,
+            "status": "inconclusive",
+            "http_status": response.status_code,
+            "method": "official_api",
+            "evidence": f"GitLab API returned HTTP {response.status_code}.",
+        }
+    except (requests.RequestException, ValueError) as exc:
+        return {
+            "source": "GitLab",
+            "url": profile_url,
+            "status": "inconclusive",
+            "method": "official_api",
+            "evidence": str(exc),
+        }
+
+def check_youtube(username: str) -> dict[str, Any]:
+    base = {
+        "source": "YouTube",
+        "url": "https://www.youtube.com/results?search_query=" + quote(username),
+        "method": "official_api",
+    }
+    if not YOUTUBE_API_KEY:
+        return {
+            **base,
+            "status": "inconclusive",
+            "evidence": "YOUTUBE_API_KEY is not configured; YouTube search was not run.",
+        }
+    try:
+        response = requests.get(
+            "https://www.googleapis.com/youtube/v3/search",
+            params={
+                "part": "snippet",
+                "type": "channel",
+                "q": username,
+                "maxResults": 10,
+                "key": YOUTUBE_API_KEY,
+            },
+            timeout=10,
+        )
+        if response.status_code != 200:
+            return {
+                **base,
+                "status": "inconclusive",
+                "http_status": response.status_code,
+                "evidence": f"YouTube API returned HTTP {response.status_code}; check the key, quota, and API enablement.",
+            }
+        data = response.json()
+        if not isinstance(data, dict) or not isinstance(data.get("items", []), list):
+            raise ValueError("YouTube API returned an unexpected response.")
+        matches = []
+        for item in data.get("items", []):
+            if not isinstance(item, dict):
+                continue
+            channel = item.get("id")
+            snippet = item.get("snippet", {})
+            if (
+                not isinstance(channel, dict)
+                or not isinstance(snippet, dict)
+                or not isinstance(channel.get("channelId"), str)
+            ):
+                continue
+            channel_id = channel["channelId"]
+            matches.append({
+                "title": snippet.get("title"),
+                "channel_id": channel_id,
+                "url": f"https://www.youtube.com/channel/{quote(channel_id, safe='')}",
+                "description": str(snippet.get("description", ""))[:300],
+            })
+        evidence = (
+            "Search results are candidate channels, not proof of an exact username or account owner."
+            if matches
+            else "No channels were returned for this query; absence is not proof that an account does not exist."
+        )
+        return {
+            **base,
+            "status": "inconclusive",
+            "http_status": response.status_code,
+            "evidence": evidence,
+            "matches": matches,
+        }
+    except requests.RequestException as exc:
+        return {
+            **base,
+            "status": "inconclusive",
+            "evidence": f"YouTube API request failed ({type(exc).__name__}).",
+        }
+    except ValueError:
+        return {
+            **base,
+            "status": "inconclusive",
+            "evidence": "YouTube API returned an invalid response.",
+        }
+
 def scan_username(raw: str) -> dict[str, Any]:
     username = raw.strip().lstrip("@")
     if not USERNAME_RE.fullmatch(username):
-        raise ValueError("Use 1–39 letters, numbers, dots, underscores, or hyphens.")
-    checks = []
+        raise ValueError("Use 1–50 letters, numbers, dots, underscores, or hyphens.")
+    checks = [
+        check_github(username),
+        check_gitlab(username),
+        check_youtube(username),
+    ]
     for site, template in PROFILE_SITES.items():
         url = template.format(username=quote(username, safe="._-"))
         try:
             response = requests.get(url, timeout=6, allow_redirects=False,
                                     headers={"User-Agent": "OSINT-Explorer-Educational/1.0"})
-            if 200 <= response.status_code < 300:
-                status = "found"
-                detail = f"HTTP {response.status_code}; public page responded successfully."
-            elif response.status_code == 404:
-                status = "not_found"
-                detail = "HTTP 404; no page found at this URL."
-            else:
-                status = "inconclusive"
-                detail = f"HTTP {response.status_code}; platform response is not conclusive."
+            status = "not_found" if response.status_code == 404 else "inconclusive"
+            detail = (
+                "Public profile URL returned HTTP 404; this is a limited signal."
+                if response.status_code == 404
+                else f"HTTP {response.status_code}; public page checks cannot reliably confirm account existence."
+            )
             checks.append({"source": site, "url": url, "status": status,
-                           "http_status": response.status_code, "detail": detail})
+                           "http_status": response.status_code, "detail": detail,
+                           "method": "public_url_check"})
         except requests.RequestException as exc:
             checks.append({"source": site, "url": url, "status": "inconclusive",
-                           "detail": str(exc)})
+                           "detail": str(exc), "method": "public_url_check"})
     found = sum(c["status"] == "found" for c in checks)
+    not_found = sum(c["status"] == "not_found" for c in checks)
     inconclusive = sum(c["status"] == "inconclusive" for c in checks)
-    overall = "complete" if inconclusive == 0 else "partial"
     return {
-        "status": overall,
-        "summary": f"Checked {len(checks)} public profile URL templates for {username}; {found} responded successfully.",
+        "status": "complete",
+        "summary": f"Checked {len(checks)} sources for {username}: {found} found signal(s), {not_found} not-found signal(s), {inconclusive} inconclusive.",
         "username": username,
         "checks": checks,
-        "note": "A successful page response is not proof of identity. Login walls, anti-bot pages, and platform changes can affect results.",
+        "note": "Official API matches and YouTube search results are public signals, not identity proof. YouTube results are candidates; generic profile pages and HTTP 200 responses are inconclusive.",
     }
 
 def scan_email(raw: str) -> dict[str, Any]:
@@ -318,6 +533,8 @@ def health():
     return {
         "ok": True,
         "breach_provider": "XposedOrNot",
+        "github_token_configured": bool(GITHUB_TOKEN),
+        "youtube_api_key_configured": bool(YOUTUBE_API_KEY),
         "time": utc_now(),
     }
 
