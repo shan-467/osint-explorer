@@ -29,7 +29,7 @@ If PowerShell blocks activation, run `Set-ExecutionPolicy -Scope Process -Execut
 Open http://127.0.0.1:8000. API documentation is at http://127.0.0.1:8000/docs.
 
 ## GitHub Pages
-GitHub Pages publishes the static dashboard from `static/` at the repository site root. Pages cannot run the FastAPI backend, so live scans and SQLite history are unavailable on the Pages-hosted copy; use the local setup above for the complete app.
+GitHub Pages publishes the static dashboard from `static/` at the repository site root. To enable scans, sign in to Render and [deploy this repository as a Render Blueprint](https://render.com/deploy?repo=https://github.com/shan-467/osint-explorer), which uses the included `render.yaml`. Then enter the service's HTTPS URL in the dashboard's **Backend URL** field. The browser saves this URL locally. The Render service allows browser requests from this Pages origin only; CORS is not authentication, so the hosted API is still publicly callable by non-browser clients. The free Render service may sleep when idle, so its first request can take a minute; its temporary filesystem does not retain scan history across restarts or deployments. Use a persistent disk and set `DATABASE_PATH` to keep hosted history, or run the app locally for persistent SQLite history.
 
 ## Email breach lookup
 Email scans send the address to XposedOrNot's public endpoint (`/v1/check-email/`) for lookup. Its free API has per-IP rate limits; a `429` response is shown as rate-limited rather than as a finding. Non-200 responses are shown as lookup errors. A successful empty response means no matching records were returned; it does not prove the address was never exposed.

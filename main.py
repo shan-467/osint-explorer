@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
 import re
 import socket
 import ssl
@@ -19,16 +20,29 @@ import requests
 from dotenv import load_dotenv
 from email_validator import EmailNotValidError, validate_email
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
-DB_PATH = BASE_DIR / "osint_history.db"
+DB_PATH = Path(os.getenv("DATABASE_PATH") or BASE_DIR / "osint_history.db")
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", "").split(",")
+    if origin.strip()
+]
 
 app = FastAPI(title="OSINT Explorer", version="1.0.0",
               description="Local educational OSINT checks; use only with authorization.")
+if CORS_ORIGINS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=CORS_ORIGINS,
+        allow_methods=["GET", "POST", "DELETE"],
+        allow_headers=["Content-Type"],
+    )
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
 # Deliberately small, explicit allowlist. No arbitrary URL fetching.
